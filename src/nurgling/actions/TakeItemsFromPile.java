@@ -9,6 +9,9 @@ import java.util.ArrayList;
 
 public class TakeItemsFromPile implements Action
 {
+    /** How long the transfer may go without a single item arriving before it is called done. */
+    private static final long IDLE_MS = 5000;
+
     NISBox pile;
     Gob gpile;
     String cap;
@@ -45,9 +48,27 @@ public class TakeItemsFromPile implements Action
             int count = Math.min(left, target_size - took);
             ((NUI)gui.ui).enableMonitor(gui.maininv);
             box.transfer(count);
+            // Give up on the transfer when the items stop arriving, not after a fixed number of
+            // frames: a large load legitimately takes seconds, and a counted-out task exits
+            // critically, which aborts the whole bot instead of letting the loop below decide.
             WaitItemFromPile wifp = new WaitItemFromPile(count)
             {
-                { infinite = false; maxCounter = 300; }
+                private long idleUntil = System.currentTimeMillis() + IDLE_MS;
+                private int seen = 0;
+
+                @Override
+                public boolean check()
+                {
+                    if(super.check())
+                        return true;
+                    int arrived = getTotalItemCount();
+                    if(arrived != seen)
+                    {
+                        seen = arrived;
+                        idleUntil = System.currentTimeMillis() + IDLE_MS;
+                    }
+                    return System.currentTimeMillis() > idleUntil;
+                }
             };
             NUtils.getUI().core.addTask(wifp);
             int taken = wifp.getTotalItemCount();
