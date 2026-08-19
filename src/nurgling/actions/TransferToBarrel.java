@@ -15,9 +15,17 @@ public class TransferToBarrel implements Action{
     Gob barrel;
     NAlias items;
 
-    int th = 9000;
+    // Capacity of a barrel, in the units the barrel tooltip counts: pieces for countable
+    // contents, litres for liquids. What matters is the room left (capacity minus current
+    // content), not a flat threshold - a barrel holding 9257 of 10000 still takes a stack.
+    static final int COUNT_CAP = 10000;
+    static final int LIQUID_CAP = 100;
 
-    double total = 0;
+    int th = COUNT_CAP;
+
+    // Set when part of the carried load did not fit, i.e. the barrel is out of room and the
+    // caller should move on to the next one.
+    boolean full = false;
 
     // When set, use exact name matching instead of NAlias substring matching
     String exactName = null;
@@ -48,39 +56,56 @@ public class TransferToBarrel implements Action{
         if ( !(new OpenTargetContainer (  "Barrel",barrel ).run ( gui ).isSuccess) ) {
             return Results.ERROR("OPEN FAIL");
         }
-        double barrelCont = gui.getBarrelContent();
-        total+=barrelCont;
-        if(barrelCont>-1 && barrelCont < th) {
+        // The barrel's content is read off its tooltip, and that tooltip arrives a few ticks
+        // after the window itself - OpenTargetContainer only waits for the RelCont. Reading it
+        // straight away yields -1 ("unknown"), which used to be taken as "no room" and skipped
+        // the whole barrel silently.
+        NUtils.addTask(new NTask() {
+            { infinite = false; }   // give up after the usual tick limit instead of blocking
 
-            ArrayList<WItem> witems = getMatchingItems(gui);
+            @Override
+            public boolean check() {
+                return gui.getBarrelContent() >= 0;
+            }
+        });
+        double barrelCont = gui.getBarrelContent();
+        if(barrelCont>-1) {
+
+            final ArrayList<WItem> witems = getMatchingItems(gui);
+            // How much an item holds comes from its tooltip, which loads asynchronously; without
+            // it nothing can be picked, so wait for the sizes before deciding anything.
+            NUtils.addTask(new NTask() {
+                { infinite = false; }
+
+                @Override
+                public boolean check() {
+                    for (WItem item : witems) {
+                        if (size(item) < 0)
+                            return false;
+                    }
+                    return true;
+                }
+            });
+
             ArrayList<WItem> targetItems = new ArrayList<>();
             double sum = 0;
+            boolean sized = true;
             for (WItem item : witems) {
-                if (sum + barrelCont > th) {
-                    break;
+                double size = size(item);
+                if (size < 0) {
+                    sized = false;
+                    continue;
                 }
-                for (ItemInfo inf : item.item.info) {
-                    if (inf instanceof GItem.Amount) {
-                        int itemNum = ((GItem.Amount) inf).itemnum();
-                        if(sum + itemNum<10000) {
-                            sum += itemNum;
-                            targetItems.add(item);
-                            break;
-                        }
-                    }
-                    if (inf instanceof CustomName)
-                    {
-                        float count = ((CustomName) inf).count;
-                        if(count > 0 && sum + count < 100) {
-                            sum += count;
-                            targetItems.add(item);
-                            break;
-                        } else {
-                        }
-                    }
+                double cap = isLiquid(item) ? LIQUID_CAP : th;
+                if (barrelCont + sum + size <= cap) {
+                    sum += size;
+                    targetItems.add(item);
                 }
             }
-            total+=sum;
+            // Full means "the barrel had no room for what we carry" - only then does the caller
+            // move on to the next barrel. A pick that failed for any other reason (sizes never
+            // arrived) is not fullness, and saying so sent the bot marching past empty barrels.
+            full = sized && targetItems.size() < witems.size();
 
             if(!targetItems.isEmpty()) {
                 NUtils.takeItemToHand(targetItems.get(0));
@@ -119,7 +144,25 @@ public class TransferToBarrel implements Action{
 
     public boolean isFull()
     {
-        return total>th;
+        return full;
+    }
+
+    /**
+     * How much of a barrel this item takes up, in the units the barrel counts: pieces for
+     * countable items, litres for liquids. -1 while the item's tooltip has not loaded yet.
+     */
+    private static double size(WItem item) {
+        GItem.Amount amount = ((NGItem) item.item).getInfo(GItem.Amount.class);
+        if (amount != null)
+            return amount.itemnum();
+        CustomName cn = ((NGItem) item.item).getInfo(CustomName.class);
+        if (cn != null && cn.count > 0)
+            return cn.count;
+        return -1;
+    }
+
+    private static boolean isLiquid(WItem item) {
+        return ((NGItem) item.item).getInfo(GItem.Amount.class) == null;
     }
 
     /**

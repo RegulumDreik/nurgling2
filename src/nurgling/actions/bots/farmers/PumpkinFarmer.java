@@ -65,7 +65,7 @@ public class PumpkinFarmer implements Action {
             }
             
             if (pumpkinFlesh != null)
-                new LettuceAndPumpkinCollector(NContext.findSpec(field), NContext.findSpec(seed), pumpkinFlesh, new NAlias(Arrays.asList("items/pumpkin", "Pumpkin"), Arrays.asList("plants", "seed", "flesh")), NContext.findSpec(trough)).run(gui);
+                new LettuceAndPumpkinCollector(NContext.findSpec(field), NContext.findSpec(seed), pumpkinFlesh, new NAlias(Arrays.asList("items/pumpkin", "Pumpkin"), Arrays.asList("plants", "seed", "flesh")), NContext.findSpec(trough), NContext.findSpec(swill)).run(gui);
             new SeedCrop(NContext.findSpec(field), NContext.findSpec(seed), new NAlias("plants/pumpkin")).run(gui);
 
             NUtils.stackSwitch(oldStackingValue);

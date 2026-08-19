@@ -19,6 +19,7 @@ public class LettuceAndPumpkinCollector implements Action {
     NArea seedOutput;
     NArea itemOutput;
     NArea troughArea;
+    NArea swillArea;
     NAlias items;
     String secondaryItemAlias;
     boolean isQualityGrid = false;
@@ -30,6 +31,11 @@ public class LettuceAndPumpkinCollector implements Action {
         this.items = items;
         this.troughArea = troughArea;
         this.secondaryItemAlias = items.keys.contains("Head of Lettuce") ? "Lettuce Leaf" : "Pumpkin Flesh";
+    }
+
+    public LettuceAndPumpkinCollector(NArea input, NArea seedOutput, NArea itemOutput, NAlias items, NArea troughArea, NArea swillArea) {
+        this(input, seedOutput, itemOutput, items, troughArea);
+        this.swillArea = swillArea;
     }
 
     public LettuceAndPumpkinCollector(NArea input, NArea seedOutput, NArea itemOutput, NAlias items, NArea troughArea, boolean isQualityGrid) {
@@ -119,26 +125,60 @@ public class LettuceAndPumpkinCollector implements Action {
             new TransferToContainer(container, new NAlias("Seed")).run(gui);
             new CloseTargetContainer(container).run(gui);
         } else {
-            // Regular mode: transfer seeds to barrels, then trough, then piles
+            // Regular mode: transfer seeds to barrels, then trough
             ArrayList<Gob> barrels = Finder.findGobs(seedOutput, new NAlias("barrel"));
 
-            if (!barrels.isEmpty()) {
-                for (Gob barrel : barrels) {
-                    TransferToBarrel tb = new TransferToBarrel(barrel, new NAlias("Seed"));
-                    tb.run(gui);
-                    if (!tb.isFull()) break;
-                }
-
-                if (troughArea != null && !gui.getInventory().getItems(new NAlias("Seed")).isEmpty()) {
-                    Gob trough = Finder.findGob(troughArea, new NAlias("gfx/terobjs/trough"));
-                    if (trough != null) {
-                        new TransferToTrough(trough, new NAlias("Seed")).run(gui);
-                    }
+            boolean barrelsFull = !barrels.isEmpty();
+            for (Gob barrel : barrels) {
+                TransferToBarrel tb = new TransferToBarrel(barrel, new NAlias("Seed"));
+                tb.run(gui);
+                if (!tb.isFull()) {
+                    barrelsFull = false;
+                    break;
                 }
             }
 
-            if (!gui.getInventory().getItems(new NAlias("Seed")).isEmpty()) {
-                new TransferToPiles(seedOutput.getRCArea(), new NAlias("Seed")).run(gui);
+            boolean troughFound = false;
+            boolean troughFull = false;
+            if (troughArea != null && !gui.getInventory().getItems(new NAlias("Seed")).isEmpty()) {
+                Gob trough = Finder.findGob(troughArea, new NAlias("gfx/terobjs/trough"));
+                if (trough == null) {
+                    // Gobs only exist within the map load radius, so a trough area at the far end
+                    // of the field holds nothing until we walk over there. Head that way once and
+                    // look again before declaring it troughless. Stop a few tiles short of the
+                    // area rather than aiming at its centre - the trough usually stands in it, and
+                    // walking onto the thing we are looking for just fails to path.
+                    Pair<Coord2d, Coord2d> ta = troughArea.getRCArea();
+                    Coord2d centre = ta.a.add(ta.b).div(2);
+                    Coord2d from = gui.map.player().rc;
+                    double dist = centre.dist(from);
+                    double stop = MCache.tilesz2.x * 3;
+                    new PathFinder(dist > stop ? from.add(centre.sub(from).mul((dist - stop) / dist)) : centre).run(gui);
+                    trough = Finder.findGob(troughArea, new NAlias("gfx/terobjs/trough"));
+                }
+                if (trough != null) {
+                    troughFound = true;
+                    // Pass the cistern along, as HarvestCrop does: without it a full trough is a
+                    // dead end and the seeds stay in the inventory, while with it the trough gets
+                    // emptied into the cistern and keeps taking the rest of the harvest.
+                    Gob cistern = swillArea != null ? Finder.findGob(swillArea, new NAlias("gfx/terobjs/cistern")) : null;
+                    troughFull = trough.ngob.getModelAttribute() == 7 && cistern == null;
+                    new TransferToTrough(trough, new NAlias("Seed"), cistern).run(gui);
+                }
+            }
+
+            // No pile fallback: these seeds only go into barrels/troughs. Right-clicking the
+            // ground with them is a no-op the server never answers, so PileMaker would wait
+            // for a placement ghost that never appears and the bot would hang there forever.
+            ArrayList<WItem> left = gui.getInventory().getItems(new NAlias("Seed"));
+            if (!left.isEmpty()) {
+                if (barrelsFull && !troughFound) {
+                    gui.error("Seed storage is full - barrels are full and no trough was found");
+                } else if (barrelsFull && troughFull) {
+                    gui.error("Seed storage is full - barrels and trough are full");
+                } else {
+                    gui.error("Seed storage is full");
+                }
             }
         }
     }
